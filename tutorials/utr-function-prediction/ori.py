@@ -45,8 +45,6 @@ seed_torch(2021)
 # In[2]:
 
 
-
-
 class Human5PrimeUTRPredictor(torch.nn.Module):
     """
     contact predictor with inner product
@@ -73,6 +71,8 @@ class Human5PrimeUTRPredictor(torch.nn.Module):
 
         if self.arch == "cnn" and self.in_channels != 0:
             self.predictor = CNNModel(in_planes=self.in_channels, out_planes=1)
+        # if self.arch == "cnn" and self.in_channels != 0:
+            # self.predictor = self.create_1dcnn_for_emd(in_planes=self.in_channels, out_planes=1)
         else:
             raise Exception("Wrong Arch Type")
 
@@ -101,6 +101,7 @@ class Human5PrimeUTRPredictor(torch.nn.Module):
             embeddings = embeddings.permute(0, 2, 1)
             ensemble_inputs.append(embeddings)        
 
+        ensemble_inputs = torch.cat(ensemble_inputs, dim=1)        
         output, feature_maps = self.predictor(ensemble_inputs)
         output = output.squeeze(-1)
         return output, feature_maps
@@ -149,7 +150,7 @@ class Human5PrimeUTRPredictor(torch.nn.Module):
             padding_masks = None
 
         return seqs, padding_masks
-
+    
 class CNNModel(nn.Module):
     def __init__(self, in_planes, out_planes):
         super(CNNModel, self).__init__()
@@ -188,6 +189,7 @@ class CNNModel(nn.Module):
         x = self.dropout(x)
         out = self.fc(x)
         return out, feature_maps
+
 
 class ResBlock(nn.Module):
     def __init__(
@@ -269,7 +271,7 @@ print(backbone)
 
 task="rgs"
 arch="cnn"
-input_items = ["seq","emb-rnafm"] # sys.argv[1].split("_")   #["seq","emb-rnafm"]   # ["seq"], ["emb-rnafm"], ["seq","emb-rnafm"]
+input_items = ["seq","emb-rnafm"]   #["seq","emb-rnafm"]   # ["seq"], ["emb-rnafm"], ["seq","emb-rnafm"]
 model_name = arch.upper() + "_" + "_".join(input_items) 
 utr_func_predictor = Human5PrimeUTRPredictor(
     alphabet, task=task, arch=arch, input_types=input_items    
@@ -295,8 +297,16 @@ optimizer = optim.Adam(utr_func_predictor.parameters(), lr=0.001)
 # ### (1) define utr dataset
 
 # In[6]:
+
+
 class Human_5Prime_UTR_VarLength(object):
     def __init__(self, root, set_name="train", train_size=None):
+        """
+        :param root: root path of dataset - CATH. however not all of stuffs under this root path
+        :param data_type: seq, msa
+        :param label_type: 1d, 2d
+        :param set_name: "train", "valid", "test"
+        """
         self.root = root
         self.set_name = set_name
         self.train_size = train_size
@@ -362,9 +372,11 @@ class Human_5Prime_UTR_VarLength(object):
         if self.set_name == "train":
             set_df = train_df
             if self.train_size is not None:
-                set_df = set_df.sample(n=self.train_size, random_state=42)
+                set_df = set_df.sample(n=self.train_size, random_state=2021)
         elif self.set_name == "valid":
             set_df = random_df_test
+            if self.train_size is not None:
+                set_df = set_df.sample(n=self.train_size, random_state=2021)
         else:
             set_df = human_df_test 
         seqs = set_df['utr'].values
@@ -410,7 +422,7 @@ def collate_fn(batch):
 
 
 root_path = "./"
-train_set =  Human_5Prime_UTR_VarLength(root=root_path, set_name="train", train_size=1000)
+train_set =  Human_5Prime_UTR_VarLength(root=root_path, set_name="train")
 val_set =  Human_5Prime_UTR_VarLength(root=root_path, set_name="valid")
 test_set =  Human_5Prime_UTR_VarLength(root=root_path, set_name="test")
 
@@ -440,39 +452,14 @@ scaler = train_set.scaler
 # ### (1) define eval function
 
 # In[8]:
+import numpy as np
 
-
-# def model_eval(data_loader, i_epoch, set_name="unknown"):
-#     all_losses = []
-#     true_rl_mses = []
-#     for index, (seq_strs, tokens, labels) in enumerate(data_loader):
-#         backbone.eval()
-#         utr_func_predictor.eval()
-#         tokens = tokens.to(device)
-#         labels = labels.to(device)
-#         with torch.no_grad():             
-#             inputs = {}
-#             results = {}
-#             if "emb-rnafm" in input_items:
-#                 results = backbone(tokens, need_head_weights=False, repr_layers=[12], return_contacts=False)
-#                 inputs["emb-rnafm"] = results["representations"][12] 
-#             results["rl"] = utr_func_predictor(tokens, inputs)        
-#             losses = criterion(results["rl"], labels)  
-#             all_losses.append(losses.detach().cpu())    
-            
-#             # true value metric
-#             pds = scaler.inverse_transform(results["rl"].detach().cpu().numpy())
-#             gts = scaler.inverse_transform(labels.detach().cpu().numpy())
-#             true_rl_mse = criterion(torch.Tensor(pds), torch.Tensor(gts))  
-#             true_rl_mses.append(true_rl_mse.detach().cpu())  
-
-#     avg_loss = torch.cat(all_losses, dim=0).mean()
-#     avg_true_rl_mses = torch.cat(true_rl_mses, dim=0).mean()
-#     print("Epoch {}, Evaluation on {} Set - MSE loss: {:.3f}".format(i_epoch, set_name, avg_loss))
-#     print("Epoch {}, Evaluation on {} Set - True MSE: {:.3f}".format(i_epoch, set_name, avg_true_rl_mses))
-    
-#     return avg_loss
-
+def upsample_cam(cam, seq_length):
+    cam_length = len(cam)
+    cam_positions = np.arange(cam_length)
+    seq_positions = np.linspace(0, cam_length - 1, num=seq_length)
+    cam_upsampled = np.interp(seq_positions, cam_positions, cam)
+    return cam_upsampled
 
 def compute_cams(feature_maps, model):
     # feature_maps: Tensor of shape [batch_size, num_channels, sequence_length]
@@ -485,7 +472,6 @@ def compute_cams(feature_maps, model):
     # cams shape: [batch_size, sequence_length]
 
     return cams
-
 def model_eval(data_loader, i_epoch, set_name="unknown"):
     all_losses = []
     true_rl_mses = []
@@ -562,7 +548,7 @@ for i_e in range(1, n_epoches+1):
             with torch.no_grad():
                 results = backbone(tokens, need_head_weights=False, repr_layers=[12], return_contacts=False)            
             inputs["emb-rnafm"] = results["representations"][12]                
-        results["rl"] = utr_func_predictor(tokens, inputs)
+        results["rl"], feature_map = utr_func_predictor(tokens, inputs)
         losses = criterion(results["rl"], labels)
         batch_loss = losses.mean()
         batch_loss.backward()
@@ -575,7 +561,6 @@ for i_e in range(1, n_epoches+1):
         pbar.set_description("Epoch {}, Train Set - MSE loss: {:.3f}".format(i_e, current_avg_loss))
     
     random_mse, all_cams, all_sequences, pseudo_labels = model_eval(val_loader, i_e, set_name="Random")
-    
     if random_mse < best_mse:
         best_epoch = i_e
         best_mse = random_mse
@@ -583,19 +568,66 @@ for i_e in range(1, n_epoches+1):
     print("--------- Model: {}, Best Epoch {}, Best MSE {:.3f}".format(model_name, best_epoch, best_mse))
 
 
+# In[ ]:
 
 import matplotlib.pyplot as plt
+import numpy as np
 
-# Select the sequence and CAM you want to visualize
-sequence = all_sequences[0]
-cam = all_cams[0]  # Corresponding CAM
+# Number of sequences you want to visualize
+num_sequences_to_plot = 5
 
-# Normalize the CAM for visualization
-cam = (cam - cam.min()) / (cam.max() - cam.min())
+for idx in range(num_sequences_to_plot):
+    sequence = all_sequences[idx]
+    cam = all_cams[idx]
 
-plt.figure(figsize=(15, 5))
-plt.bar(range(len(sequence)), cam, tick_label=list(sequence))
-plt.title('Class Activation Map')
-plt.xlabel('Sequence Position')
-plt.ylabel('Activation')
-plt.show()
+    # Ensure cam is a NumPy array
+    cam = cam.cpu().numpy() if isinstance(cam, torch.Tensor) else cam
+
+    # Upsample the CAM to match the sequence length
+    cam_upsampled = upsample_cam(cam, len(sequence))
+
+    # Normalize the CAM for visualization
+    if cam_upsampled.max() > cam_upsampled.min():
+        cam_norm = (cam_upsampled - cam_upsampled.min()) / (cam_upsampled.max() - cam_upsampled.min())
+    else:
+        cam_norm = np.zeros_like(cam_upsampled)
+
+    # Generate pseudo labels
+    threshold = 0.5  # You can adjust this threshold
+    pseudo_label = (cam_norm >= threshold).astype(int)
+    pseudo_labels.append(pseudo_label)
+
+    # Plotting CAM heatmap
+    plt.figure(figsize=(15, 2))
+    plt.imshow(cam_norm[np.newaxis, :], aspect='auto', cmap='viridis')
+    plt.colorbar(label='CAM Activation')
+    plt.title(f'Sequence {idx+1} - CAM Heatmap')
+    plt.xlabel('Sequence Position')
+    plt.yticks([])  # Hide y-axis ticks
+
+    # Adjust x-ticks to avoid cluttering
+    max_ticks = 20
+    if len(sequence) > max_ticks:
+        step = len(sequence) // max_ticks
+        positions = np.arange(0, len(sequence), step)
+        labels = [sequence[pos] for pos in positions]
+    else:
+        positions = np.arange(len(sequence))
+        labels = list(sequence)
+    plt.xticks(positions, labels, rotation='vertical')
+    plt.tight_layout()
+    plt.show()
+
+    # Plotting Pseudo Label heatmap
+    plt.figure(figsize=(15, 1))
+    plt.imshow(pseudo_label[np.newaxis, :], aspect='auto', cmap='binary')
+    plt.colorbar(label='Pseudo Label')
+    plt.title(f'Sequence {idx+1} - Pseudo Label Heatmap')
+    plt.xlabel('Sequence Position')
+    plt.yticks([])  # Hide y-axis ticks
+
+    # Use the same x-ticks as above
+    plt.xticks(positions, labels, rotation='vertical')
+    plt.tight_layout()
+    plt.show()
+# %%

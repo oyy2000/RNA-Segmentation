@@ -134,4 +134,7 @@ dependencies:
     - werkzeug==2.0.1
     - yacs==0.1.8
     - zipp==3.6.0
-prefix: /home/chenjiayang/.conda/envs/DeepLearning
+prefix: /home/kz34/Yang_Ouyang_Projects/RNA_FM_ENV
+
+
+# 10YXOA5bSs8WRcZOb9Jh6fntN8NFbn8z0
